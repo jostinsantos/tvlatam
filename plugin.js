@@ -1,6 +1,7 @@
+
 /**
  * TV Latam – Canales en vivo (lista M3U)
- * Perú, Chile, Argentina, España e internacionales, agrupados por género.
+ * Compatible con el sistema de TV online de la app (getHome + getStreams + type: channel).
  *
  * Métodos: getHome, getNews, getDiscoverFilters, getDiscover,
  *          search, getMeta, getStreams, getCatalogs, getCatalog, getAds
@@ -10,6 +11,7 @@
 
 var PAGINA = 200;
 var MAX_CATEGORIA_CHICA = 3;
+var CACHE_MS = 10 * 60 * 1000;
 
 var EMBEBIDA = [
   ["13 C", "http://190.108.83.69:8000/play/a02o/index.m3u8"],
@@ -190,11 +192,26 @@ var REGLAS = [
 var SIGLAS = {hd:1,sd:1,tv:1,hbo:1,tnt:1,cnn:1,amc:1,axn:1,dhe:1,ds:1,fx:1,ntn:1,htv:1,tcm:1,espn:1,bbc:1,cctv:1,cgtn:1,atv:1,chv:1,tvn:1,tve:1,usa:1,etc:1,ewtn:1,rpp:1,mtv:1,tlc:1,hgtv:1,id:1,l1:1,max:1,hei:1,pbo:1,dw:1};
 var ADULTO = /playboy|sextreme|^venus$|xxx|porn|erotic/i;
 
+var HOST_BASE = "http://190.108.83.69:8000/";
+var DEFAULT_HEADERS = {
+  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+  "Referer": HOST_BASE,
+  "Origin": "http://190.108.83.69:8000",
+  "Accept": "*/*"
+};
+
 function cfg(key) {
   try {
     if (typeof globalThis !== "undefined" && globalThis.__nuvioConfig) {
-      var cur = globalThis.__nuvioConfig.current || globalThis.__nuvioConfig;
-      if (cur && cur[key] != null) return String(cur[key]);
+      var root = globalThis.__nuvioConfig;
+      var cur = root.current || root;
+      // También por id del addon
+      if ((!cur || cur[key] == null) && root["tv-latam-lista"]) {
+        cur = root["tv-latam-lista"];
+      }
+      if (cur && cur[key] != null && String(cur[key]).trim() !== "") {
+        return String(cur[key]).trim();
+      }
     }
   } catch (e) {}
   return "";
@@ -253,6 +270,7 @@ function categoriaDe(titulo, prefijos) {
 function parsearM3U(texto) {
   var salida = [];
   var nombre = null;
+  var logo = null;
   var lineas = String(texto).split(/\r?\n/);
   for (var i = 0; i < lineas.length; i++) {
     var linea = lineas[i].trim();
@@ -260,11 +278,17 @@ function parsearM3U(texto) {
     if (linea.indexOf("#EXTINF") === 0) {
       var idx = linea.indexOf(",");
       nombre = idx >= 0 ? linea.slice(idx + 1) : "";
+      logo = null;
+      var lm = linea.match(/tvg-logo="([^"]+)"/i) || linea.match(/tvg-logo='([^']+)'/i);
+      if (lm) logo = lm[1];
       continue;
     }
     if (linea.charAt(0) === "#") continue;
-    if (/^https?:\/\//i.test(linea)) salida.push({ nombre: nombre || linea, url: linea });
+    if (/^https?:\/\//i.test(linea)) {
+      salida.push({ nombre: nombre || linea, url: linea, logo: logo });
+    }
     nombre = null;
+    logo = null;
   }
   return salida;
 }
@@ -309,13 +333,21 @@ function preparar(entradas) {
     var id = idDe(e.url);
     while (ids[id]) id += "x";
     ids[id] = 1;
-    lista.push({ id: id, title: titulo, categoryId: categoriaDe(titulo, limpio.prefijos), url: e.url });
+    lista.push({
+      id: id,
+      title: titulo,
+      categoryId: categoriaDe(titulo, limpio.prefijos),
+      url: e.url,
+      logo: e.logo || null
+    });
   }
   var cuenta = {};
   for (var j = 0; j < lista.length; j++) cuenta[lista[j].categoryId] = (cuenta[lista[j].categoryId] || 0) + 1;
   for (var k = 0; k < lista.length; k++) {
     var c = lista[k];
-    if (c.categoryId !== "deportes" && c.categoryId !== "otros" && (cuenta[c.categoryId] || 0) <= MAX_CATEGORIA_CHICA) c.categoryId = "otros";
+    if (c.categoryId !== "deportes" && c.categoryId !== "otros" && (cuenta[c.categoryId] || 0) <= MAX_CATEGORIA_CHICA) {
+      c.categoryId = "otros";
+    }
   }
   lista.sort(function (a, b) { return comparar(clave(a.title), clave(b.title)); });
   return lista;
@@ -326,54 +358,138 @@ function categoriaTitle(id) {
   return id;
 }
 
+/** Item compatible con ContentItem de la app (type channel + extra.streamUrl). */
 function toChannelItem(c) {
+  var catTitle = categoriaTitle(c.categoryId) || c.categoryId || "En vivo";
   return {
     id: "ch-" + c.id,
     title: c.title,
     type: "channel",
-    poster: null,
-    backdrop: null,
-    overview: "Canal en vivo · " + (categoriaTitle(c.categoryId) || c.categoryId),
-    genres: [categoriaTitle(c.categoryId) || "En vivo"],
+    poster: c.logo || null,
+    backdrop: c.logo || null,
+    logo: c.logo || null,
+    overview: "Canal en vivo · " + catTitle,
+    genres: [catTitle, "En vivo"],
     seasons: [],
+    // Campos planos también en raíz (ContentItem.fromJson guarda todo en extra)
+    streamUrl: c.url,
+    currentProgram: null,
     extra: {
       ref: c.id,
       postType: "channel",
       originalId: c.id,
       categoryId: c.categoryId,
-      streamUrl: c.url
+      streamUrl: c.url,
+      isLive: true,
+      isHls: true
     }
   };
 }
 
+function streamHeadersFor(url) {
+  var h = {};
+  for (var k in DEFAULT_HEADERS) h[k] = DEFAULT_HEADERS[k];
+  try {
+    if (url && /^https?:\/\//i.test(url)) {
+      var m = String(url).match(/^(https?:\/\/[^/]+)/i);
+      if (m) {
+        h["Referer"] = m[1] + "/";
+        h["Origin"] = m[1];
+      }
+    }
+  } catch (e) {}
+  return h;
+}
+
+/** StreamServer compatible con StreamServer.fromJson de la app. */
+function toStreamServer(c) {
+  var headers = streamHeadersFor(c.url);
+  return {
+    url: c.url,
+    name: c.title || "En vivo",
+    title: c.title || "En vivo",
+    quality: "Live",
+    language: "es",
+    type: "hls",
+    isHls: true,
+    headers: headers,
+    behaviorHints: {
+      notWebReady: false,
+      bingeGroup: "tv-latam-" + (c.categoryId || "live"),
+      proxyHeaders: {
+        request: headers
+      }
+    }
+  };
+}
+
+function normalizeId(id) {
+  if (id == null) return "";
+  if (typeof id === "object") {
+    id = id.id || id.contentId || id.metaId || id.tmdbId || "";
+  }
+  return String(id).replace(/^ch-/, "").trim();
+}
+
 var _cacheLista = null;
 var _cacheTs = 0;
+var _byId = null;
 
-async function canalesActuales() {
+function indexar(lista) {
+  _byId = {};
+  for (var i = 0; i < lista.length; i++) {
+    _byId[lista[i].id] = lista[i];
+    _byId["ch-" + lista[i].id] = lista[i];
+  }
+}
+
+async function canalesActuales(force) {
   var ahora = Date.now();
-  if (_cacheLista && (ahora - _cacheTs) < 10 * 60 * 1000) return _cacheLista;
+  if (!force && _cacheLista && (ahora - _cacheTs) < CACHE_MS) return _cacheLista;
+
   var direccion = cfg("lista");
   var entradas = null;
+
   if (direccion && /^https?:\/\//i.test(direccion)) {
     try {
       var res = await fetch(direccion, {
         method: "GET",
-        headers: { "User-Agent": "Mozilla/5.0", "Accept": "application/vnd.apple.mpegurl,text/plain,*/*" }
+        headers: {
+          "User-Agent": DEFAULT_HEADERS["User-Agent"],
+          "Accept": "application/vnd.apple.mpegurl,text/plain,*/*"
+        }
       });
-      if (res && res.ok) {
-        var texto = await res.text();
+      if (res && (res.ok || res.status === 200)) {
+        var texto = typeof res.text === "function" ? await res.text() : (res.data || "");
         var nuevas = parsearM3U(texto).slice(0, 2000);
         if (nuevas.length > 0) entradas = nuevas;
       }
-    } catch (e) {}
+    } catch (e) {
+      // Si falla la lista externa, cae a embebida
+    }
   }
+
   if (!entradas) {
     entradas = [];
-    for (var i = 0; i < EMBEBIDA.length; i++) entradas.push({ nombre: EMBEBIDA[i][0], url: EMBEBIDA[i][1] });
+    for (var i = 0; i < EMBEBIDA.length; i++) {
+      entradas.push({ nombre: EMBEBIDA[i][0], url: EMBEBIDA[i][1], logo: null });
+    }
   }
+
   _cacheLista = preparar(entradas);
   _cacheTs = ahora;
+  indexar(_cacheLista);
   return _cacheLista;
+}
+
+function buscarCanal(id) {
+  var raw = normalizeId(id);
+  if (!raw) return null;
+  if (_byId) {
+    if (_byId[raw]) return _byId[raw];
+    if (_byId["ch-" + raw]) return _byId["ch-" + raw];
+  }
+  return null;
 }
 
 async function getHome() {
@@ -384,17 +500,35 @@ async function getHome() {
     if (!porCat[c.categoryId]) porCat[c.categoryId] = [];
     porCat[c.categoryId].push(c);
   }
+
   var rows = [];
+
+  // Hero / destacados (deportes o todos)
   var heroSrc = porCat["deportes"] || canales;
   if (heroSrc.length) {
-    rows.push({ id: "en-vivo", title: "En vivo ahora", type: "hero", imageStyle: "backdrop", items: heroSrc.slice(0, 12).map(toChannelItem) });
+    rows.push({
+      id: "en-vivo",
+      title: "En vivo ahora",
+      type: "hero",
+      imageStyle: "backdrop",
+      items: heroSrc.slice(0, 12).map(toChannelItem)
+    });
   }
+
+  // Filas por categoría (la app RepoLivePage filtra type channel / títulos live)
   for (var ci = 0; ci < CATEGORIAS.length; ci++) {
     var cat = CATEGORIAS[ci];
     var list = porCat[cat.id];
     if (!list || !list.length) continue;
-    rows.push({ id: cat.id, title: cat.title, type: "row", imageStyle: "poster", items: list.slice(0, 24).map(toChannelItem) });
+    rows.push({
+      id: cat.id,
+      title: cat.title,
+      type: "row",
+      imageStyle: "poster",
+      items: list.slice(0, 48).map(toChannelItem)
+    });
   }
+
   return rows;
 }
 
@@ -408,23 +542,33 @@ async function getDiscoverFilters() {
   for (var i = 0; i < canales.length; i++) presentes[canales[i].categoryId] = 1;
   var options = [{ id: "all", label: "Todos" }];
   for (var j = 0; j < CATEGORIAS.length; j++) {
-    if (presentes[CATEGORIAS[j].id]) options.push({ id: CATEGORIAS[j].id, label: CATEGORIAS[j].title });
+    if (presentes[CATEGORIAS[j].id]) {
+      options.push({ id: CATEGORIAS[j].id, label: CATEGORIAS[j].title });
+    }
   }
   return [{ id: "category", title: "Categoría", label: "Categoría", type: "select", options: options }];
 }
 
 async function getDiscover(opts) {
   opts = opts || {};
+  // La app a veces pasa args como objeto único
+  if (typeof opts === "string") opts = { category: opts };
   var page = parseInt(opts.page, 10) || 1;
   var cat = opts.category || opts.filter || opts.filterId || opts.type || "all";
+  if (cat === "channel" || cat === "live" || cat === "tv") cat = "all";
   var canales = await canalesActuales();
   if (cat && cat !== "all") canales = canales.filter(function (c) { return c.categoryId === cat; });
   var perPage = 24;
   var start = (page - 1) * perPage;
-  return { items: canales.slice(start, start + perPage).map(toChannelItem), hasMore: start + perPage < canales.length, page: page };
+  return {
+    items: canales.slice(start, start + perPage).map(toChannelItem),
+    hasMore: start + perPage < canales.length,
+    page: page
+  };
 }
 
 async function search(query) {
+  if (query && typeof query === "object") query = query.query || query.q || query.text || "";
   if (!query || typeof query !== "string" || !query.trim()) return [];
   var q = sinTildes(query.trim());
   var canales = await canalesActuales();
@@ -436,43 +580,61 @@ async function search(query) {
 }
 
 async function getMeta(id) {
-  if (!id) return null;
-  var raw = String(id).replace(/^ch-/, "");
+  // Soporta getMeta(id) o getMeta({ id })
+  var raw = normalizeId(id);
   var canales = await canalesActuales();
-  for (var i = 0; i < canales.length; i++) {
-    if (canales[i].id === raw || ("ch-" + canales[i].id) === String(id)) {
-      var item = toChannelItem(canales[i]);
-      item.seasons = [];
-      return item;
+  var c = buscarCanal(raw);
+  if (!c) {
+    for (var i = 0; i < canales.length; i++) {
+      if (canales[i].id === raw || ("ch-" + canales[i].id) === String(id)) {
+        c = canales[i];
+        break;
+      }
     }
   }
+  if (c) {
+    var item = toChannelItem(c);
+    item.seasons = [];
+    return item;
+  }
   return {
-    id: String(id), title: "Canal", type: "channel", overview: "Canal en vivo",
-    genres: ["En vivo"], seasons: [], extra: { postType: "channel", originalId: raw }
+    id: String(id || raw || ""),
+    title: "Canal",
+    type: "channel",
+    overview: "Canal en vivo",
+    genres: ["En vivo"],
+    seasons: [],
+    extra: { postType: "channel", originalId: raw, isLive: true }
   };
 }
 
-async function getStreams(id) {
-  if (!id) return [];
-  var raw = String(id).replace(/^ch-/, "");
+/**
+ * La app llama: getStreams(id, type, season, episode)
+ * También puede llegar solo id o un objeto.
+ */
+async function getStreams(id, type, season, episode) {
+  var raw = normalizeId(id);
+  if (!raw && type && typeof type === "object") raw = normalizeId(type);
+
   var canales = await canalesActuales();
-  for (var i = 0; i < canales.length; i++) {
-    if (canales[i].id === raw || ("ch-" + canales[i].id) === String(id)) {
-      return [{
-        url: canales[i].url,
-        name: canales[i].title,
-        quality: "Live",
-        language: "es",
-        type: "hls",
-        isHls: true,
-        headers: {
-          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-          "Referer": "http://190.108.83.69:8000/"
-        }
-      }];
+  var c = buscarCanal(raw);
+
+  if (!c) {
+    for (var i = 0; i < canales.length; i++) {
+      if (
+        canales[i].id === raw ||
+        ("ch-" + canales[i].id) === String(id) ||
+        canales[i].id === String(id)
+      ) {
+        c = canales[i];
+        break;
+      }
     }
   }
-  return [];
+
+  if (!c || !c.url) return [];
+
+  return [toStreamServer(c)];
 }
 
 async function getCatalogs() {
@@ -481,21 +643,39 @@ async function getCatalogs() {
   for (var i = 0; i < canales.length; i++) presentes[canales[i].categoryId] = 1;
   var out = [];
   for (var j = 0; j < CATEGORIAS.length; j++) {
-    if (presentes[CATEGORIAS[j].id]) out.push({ id: CATEGORIAS[j].id, title: CATEGORIAS[j].title, type: "channel" });
+    if (presentes[CATEGORIAS[j].id]) {
+      out.push({
+        id: CATEGORIAS[j].id,
+        title: CATEGORIAS[j].title,
+        type: "channel"
+      });
+    }
   }
   return out;
 }
 
 async function getCatalog(catalogId, opts) {
   opts = opts || {};
+  if (typeof catalogId === "object") {
+    opts = catalogId;
+    catalogId = opts.id || opts.catalogId || opts.category;
+  }
   var page = parseInt(opts.page, 10) || 1;
-  var canales = (await canalesActuales()).filter(function (c) { return c.categoryId === catalogId; });
+  var canales = (await canalesActuales()).filter(function (c) {
+    return c.categoryId === catalogId;
+  });
   var perPage = 24;
   var start = (page - 1) * perPage;
-  return { items: canales.slice(start, start + perPage).map(toChannelItem), hasMore: start + perPage < canales.length, page: page };
+  return {
+    items: canales.slice(start, start + perPage).map(toChannelItem),
+    hasMore: start + perPage < canales.length,
+    page: page
+  };
 }
 
-async function getAds() { return []; }
+async function getAds() {
+  return [];
+}
 
 module.exports = {
   getHome: getHome,
