@@ -1,20 +1,28 @@
 {
   "id": "tv-latam-lista",
   "name": "TV Latam",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "author": "JuandreXter (adaptado)",
   "description": "Canales en vivo de Latinoamérica, España e internacionales, agrupados por género. Incluye lista propia y opción de actualizar desde una URL M3U.",
   "categories": [
     "live",
-    "tv"
+    "tv",
+    "iptv"
   ],
   "capabilities": [
     "home",
+    "live",
     "discover",
     "search",
     "meta",
     "streams",
     "catalogs"
+  ],
+  "tabs": [
+    "live",
+    "home",
+    "discover",
+    "search"
   ],
   "hosts": [
     "190.108.83.69"
