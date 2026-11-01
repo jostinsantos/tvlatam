@@ -1,31 +1,50 @@
 {
   "id": "tv-latam-lista",
   "name": "TV Latam",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "author": "JuandreXter (adaptado)",
   "description": "Canales en vivo de Latinoamérica, España e internacionales, agrupados por género. Incluye lista propia y opción de actualizar desde una URL M3U.",
-  "categories": [
-    "live",
-    "tv",
-    "iptv"
-  ],
+  "categories": ["live", "tv", "iptv"],
   "capabilities": [
-    "home",
     "live",
-    "discover",
+    "home",
     "search",
     "meta",
     "streams",
-    "catalogs"
+    "catalogs",
+    "discover"
   ],
   "tabs": [
     "live",
-    "home",
-    "discover",
-    "search"
+    "search",
+    "library",
+    "settings"
   ],
-  "hosts": [
-    "190.108.83.69"
+  "pages": [
+    "live",
+    "search",
+    "library",
+    "settings"
+  ],
+  "menu": [
+    "live",
+    "search",
+    "library",
+    "settings"
+  ],
+  "hosts": ["190.108.83.69"],
+  "entry": "plugin.js",
+  "main": "plugin.js",
+  "config": [
+    {
+      "key": "lista",
+      "label": "Dirección de la lista M3U (opcional)",
+      "type": "url",
+      "defaultValue": "",
+      "default": "",
+      "description": "Si la dejas vacía se usa la lista incluida",
+      "placeholder": "http://ejemplo.com/playlist.m3u"
+    }
   ],
   "configSchema": [
     {
