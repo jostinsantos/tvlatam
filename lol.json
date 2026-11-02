@@ -5,7 +5,15 @@
   "author": "JuandreXter (adaptado)",
   "description": "Canales en vivo de Latinoamérica, España e internacionales, agrupados por género. Incluye lista propia y opción de actualizar desde una URL M3U.",
   "categories": ["live", "tv", "iptv"],
-"capabilities": ["live", "streams", "meta", "home"]
+  "capabilities": [
+    "live",
+    "home",
+    "search",
+    "meta",
+    "streams",
+    "catalogs",
+    "discover"
+  ],
   "tabs": [
     "live",
     "search",
